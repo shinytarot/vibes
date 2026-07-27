@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>vibes</title>
+</head>
+<body>
+    <h1>vibes</h1>
+    <!-- PLACEHOLDER — say whatever you want here, in your own words. A line about
+         the page, a quote, nothing at all. Images route around text, so anything
+         you write stays readable. Add more paragraphs anywhere and they're avoided too. -->
+    <p>inspired by <a href="https://xavicf.com/vibes">Xavi</a>, <a href="https://guzey.com/vibes/">Guzey</a>, <a href="https://girl.surgery/website_vibes/">Sophia</a>, and <a href="https://catherinebrewer.github.io/vibes/">Catherine</a>; <a href="https://github.com/alex-is-learning/vibes-template">make your own</a>.</p>
+    <div id="container">
+    </div>
+    <script>
+
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
+
+// Relative paths, so this works the same whether the repo is called `vibes`
+// (you.github.io/vibes/) or you.github.io (served at the root).
+fetch("image_widths_heights.json").then(f => {
+    if (f.status == 404) {
+        alert("no image_widths_heights.json — the Action that builds it hasn't run yet, or it failed. Check the Actions tab.");
+    }
+    return f.json()
+}).then(data => {
+    let key_values = shuffleArray(data);
+
+    // No images yet — an empty images/ folder is a normal state, not a bug.
+    // Without this the placement loop below reads pairs[0] forever.
+    if (!key_values.length) {
+        container.innerHTML = "<p>no images yet — drop some into the images/ folder.</p>";
+        return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    let screen_width = rect.width;
+
+    // Left alone, some images are enormous and eat the screen. Bring them roughly
+    // into line with each other. Want them bigger or smaller? Change goal_pixels.
+    const pairs = key_values.map(([key, [w, h]]) => {
+        let goal_pixels = 500*300;
+        let actual_pixels = w*h;
+        if (actual_pixels/goal_pixels > 16) {
+            return [parseInt(w/8), parseInt(h/8)];
+        }
+        if (actual_pixels/goal_pixels > 4) {
+            return [parseInt(w/4), parseInt(h/4)];
+        }
+        return [parseInt(w/2), parseInt(h/2)];
+    }).map(([w, h]) => [(w+10) > screen_width ? screen_width-10 : w, h]);
+
+    // gather all the text nodes so the images don't intersect them
+    const textNodes = [];
+    const treeWalker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        { acceptNode: (node) => node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }
+    );
+    while(treeWalker.nextNode()) textNodes.push(treeWalker.currentNode);
+
+    // Placement is deliberately stupid: throw each image at a random spot within
+    // the current height, and if it overlaps anything, throw it again. After 50
+    // misses, make the page 50px taller and keep going. Good algorithms exist.
+    let positions = [];
+    let i = 0;
+    // this could be a for loop, but it's nicer to watch them arrive one at a time.
+    let interval = setInterval(() => {
+        let height = 600;
+        let [w, h] = pairs[i];
+        while (1) {
+            let found_place = false;
+            let w_max = screen_width-w;
+            let h_max = height-h;
+            for (let _ = 0; _ < 50; _++) {
+                let a_left = Math.random() * w_max;
+                let a_top = Math.random() * h_max;
+                let a_right = a_left+w;
+                let a_bottom = a_top+h;
+
+                // do intersection checks against images
+                let intersects = false;
+                for (let j = 0; j < positions.length; j++) {
+                    let [b_left, b_top] = positions[j];
+                    let b_right = b_left + pairs[j][0];
+                    let b_bottom = b_top + pairs[j][1];
+                    if (a_left < b_right && a_right > b_left && a_bottom > b_top && a_top < b_bottom) {
+                        intersects = true;
+                        break;
+                    }
+                }
+
+                // do intersection checks against text
+                for (const node of textNodes) {
+                    const range = document.createRange();
+                    range.selectNodeContents(node);
+                    const rect = range.getBoundingClientRect();
+                    let node_top = rect.top + window.pageYOffset;
+                    let node_left = rect.left + window.pageXOffset;
+
+                    if (a_left < (node_left+rect.width) && a_right > node_left && a_bottom > node_top && a_top < (node_top+rect.height)) {
+                        intersects = true;
+                        break;
+                    }
+                }
+
+                if (!intersects) {
+                    found_place = true;
+                    positions.push([parseInt(a_left), parseInt(a_top)]);
+                    break;
+                }
+            }
+            if (found_place) {
+                break;
+            } else {
+                height += 50;
+            }
+        }
+
+        // Create the image
+        let img = document.createElement("img");
+        img.src = "images/" + key_values[i][0];
+        img.width = pairs[i][0];
+        img.height = pairs[i][1];
+        // "px" is not optional. Bare numbers here only work in quirks mode, so
+        // without the units the whole layout silently collapses into a column
+        // the moment anyone adds the doctype above.
+        img.style.width = pairs[i][0] + "px";
+        img.style.height = pairs[i][1] + "px";
+        img.style.position = "absolute";
+        img.style.top = positions[i][1] + "px";
+        img.style.left = positions[i][0] + "px";
+        img.loading = "lazy";
+        container.appendChild(img);
+
+        i++;
+        if (i == key_values.length) {
+            clearInterval(interval);
+        }
+    }, 100);
+})
+    </script>
+</body>
+</html>

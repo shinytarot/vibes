@@ -1,0 +1,143 @@
+name: Publish vibes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/**'
+      - 'index.html'
+      - 'scripts/vibes.py'
+      - '.github/workflows/vibes.yml'
+      # Uploading from the repo's front page instead of from inside images/ puts
+      # your photos at the top level. Without these, no run starts at all: the
+      # commit succeeds, the page doesn't change, and an untouched original with
+      # its GPS in it sits in a public repo with nothing anywhere saying so.
+      - '*.jpg'
+      - '*.jpeg'
+      - '*.png'
+      - '*.webp'
+      - '*.heic'
+      - '*.heif'
+      - '*.gif'
+      - '*.bmp'
+      - '*.tif'
+      - '*.tiff'
+      - '*.avif'
+      - '*.JPG'
+      - '*.JPEG'
+      - '*.PNG'
+      - '*.HEIC'
+  workflow_dispatch:
+
+# contents: write so it can commit the compressed images back over your originals.
+# That commit is the point, not a side effect — an original left sitting in the
+# repo is a public file with your GPS coordinates in it.
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Queue, never cancel. A cancelled run dies somewhere in the middle, and if that
+# is before the rewrite step below, the commit carrying your untouched original
+# stays on main permanently — the next run rewinds only as far as *its* own push,
+# so nothing ever cleans it up. Two uploads in quick succession is ordinary
+# behaviour, and it silently defeated the entire point of this workflow.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # fetch-depth: 0 so the rewrite step below can reach the commit you pushed
+      # from and rewind past it. A shallow clone can't.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install pillow pillow-heif
+
+      # Photos uploaded from the repo's front page land here rather than in
+      # images/. Rejecting them would be correct and useless — you meant to add
+      # them, and an original left at the top level is exactly the un-stripped
+      # public file this repo exists to prevent. So move them in and carry on;
+      # vibes.py strips them like anything else.
+      - name: Rescue images uploaded to the wrong place
+        run: |
+          mkdir -p images
+          find . -maxdepth 1 -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \
+            -o -iname '*.webp' -o -iname '*.heic' -o -iname '*.heif' \
+            -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.tif' \
+            -o -iname '*.tiff' -o -iname '*.avif' \) \
+            -exec git mv -f {} images/ \; -exec echo "moved {} into images/" \;
+
+      - run: python3 scripts/vibes.py
+
+      # Replacing the original in the working tree is not enough on its own: the
+      # commit that carried it is still in the history of a public repo, so a
+      # plain `git clone` hands anyone the untouched file with its GPS intact.
+      # Verified — this isn't hypothetical.
+      #
+      # So rewind to the commit you pushed from and rebuild your upload as a
+      # single commit that only ever contained the converted files. The original
+      # blob ends up referenced by nothing.
+      #
+      # Pushes made with GITHUB_TOKEN don't trigger workflows, so this can't
+      # retrigger itself. Deploy happens below in this same run regardless.
+      - name: Commit compressed images, without the originals
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # No rewind target on workflow_dispatch, or on the branch's first push.
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            git reset --soft "$BEFORE"
+            git add -A
+            if ! git diff --staged --quiet; then
+              git commit -m "vibes: add images"
+              git push --force-with-lease
+            fi
+          else
+            git add -A
+            git diff --staged --quiet || git commit -m "vibes: compress and rebuild list"
+            git push
+          fi
+
+      # Only .webp is copied — never a glob of whatever's in images/. Anything
+      # else in there is either unprocessed or not an image, and in both cases
+      # publishing it is the failure mode this whole thing exists to avoid.
+      - name: Assemble site
+        run: |
+          mkdir -p _site/images
+          cp index.html image_widths_heights.json _site/
+          find images -maxdepth 1 -name '*.webp' -exec cp {} _site/images/ \;
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      # Last, so a rejected file doesn't block the good ones from going live —
+      # but the run still goes red and emails you, rather than passing silently.
+      - name: Report rejected files
+        run: |
+          if [ -f .vibes-rejected ]; then
+            echo "::error::These files couldn't be published and were removed from images/:"
+            cat .vibes-rejected
+            echo "Re-save them as JPEG or PNG and upload again."
+            exit 1
+          fi
