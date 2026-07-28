@@ -14,6 +14,24 @@ BRANCH="$(git symbolic-ref --short HEAD)"
 NOTICE_NAME="⚠️ THESE DIDN'T GO UP.txt"
 NOTICE="$INBOX/$NOTICE_NAME"
 
+# launchd fires this at a fixed clock time regardless of whether the Mac has
+# finished reconnecting — a lid opened seconds earlier can still be mid-DNS,
+# and a bare `git fetch`/`push` just dies right there with nothing retried.
+# That's exactly what happened on 2026-07-27: fired on time, failed on
+# "Could not resolve host", and nothing about that night's photos ever landed.
+with_retry() {
+  local n=1 max=5 delay=20
+  until "$@"; do
+    if [ "$n" -ge "$max" ]; then
+      echo "giving up after $max attempts: $*" >&2
+      return 1
+    fi
+    echo "attempt $n/$max failed ($*), retrying in ${delay}s..."
+    sleep "$delay"
+    n=$((n + 1))
+  done
+}
+
 echo "--- $(date '+%Y-%m-%d %H:%M') ---"
 mkdir -p "$INBOX"
 
@@ -28,7 +46,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-git fetch origin "$BRANCH"
+with_retry git fetch origin "$BRANCH"
 
 # The Action rewrites history whenever an image is uploaded through github.com,
 # so there's no merge to do here — lining up with the remote means a hard reset.
@@ -205,7 +223,7 @@ fi
 if [[ -n "$(git status --porcelain -- "${PATHS[@]}")" ]]; then
   git add -A -- "${PATHS[@]}"
   git commit -m "vibes sync $(date '+%Y-%m-%d %H:%M')" --quiet
-  git push origin "$BRANCH"
+  with_retry git push origin "$BRANCH"
   echo "pushed"
 else
   echo "no changes"
