@@ -196,7 +196,22 @@ find "$INBOX" -type f ! -path '*/.*' ! -name "$NOTICE_NAME" -print0 \
         dest="images/${n}-$base"
         n=$((n + 1))
       done
-      cp "$f" "$dest"
+      # -X, so the extended attributes are left behind rather than copied. A photo
+      # saved by WhatsApp (or anything that went through a file picker) carries a
+      # com.apple.macl xattr, and writing that xattr needs privileges this script
+      # has when you run it by hand and does NOT have when launchd runs it. Plain
+      # `cp` therefore failed with "Operation not permitted" — but only at night,
+      # only for those files, and fatally: images/ had already been emptied one
+      # step above, so every nightly run from 2026-08-06 onward died here and left
+      # the page frozen with the working tree full of un-stripped originals.
+      # Nothing needs those xattrs to survive into a public repo anyway.
+      if ! cp -X "$f" "$dest"; then
+        # One unreadable file must not take the whole page down with it — that is
+        # the same failure this replaced, just with a different cause.
+        echo "WARNING: couldn't copy ${f##*/} out of the inbox — skipping it and"
+        echo "         carrying on, so the rest of the page still goes up."
+        continue
+      fi
     done
 
 ./.venv/bin/python3 scripts/vibes.py
